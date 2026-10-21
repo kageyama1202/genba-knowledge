@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>現場ナレッジDB</title>
+<!-- VERSION: 2026-10-21 現場ナレッジDB v0.2(Firebase連携・共通パスワードログイン) -->
+<style>
+:root{--bg:#f4f5f7;--card:#fff;--line:#dcdfe4;--main:#1f6feb;--sub:#6b7280;--warn:#c2410c}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,"Hiragino Sans",sans-serif;background:var(--bg);color:#111;font-size:15px}
+header{position:sticky;top:0;background:#fff;border-bottom:1px solid var(--line);padding:10px 12px;z-index:5}
+h1{font-size:16px;margin:0 0 8px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+input,textarea,select{width:100%;padding:9px;border:1px solid var(--line);border-radius:8px;font-size:15px;font-family:inherit;background:#fff}
+textarea{min-height:70px;resize:vertical}
+button{padding:9px 14px;border:1px solid var(--line);border-radius:8px;background:#fff;font-size:14px;cursor:pointer}
+button.p{background:var(--main);color:#fff;border-color:var(--main)}
+button.d{color:var(--warn)}
+.tabs button{flex:1;border-radius:8px}
+.tabs button.on{background:var(--main);color:#fff;border-color:var(--main)}
+main{padding:12px;max-width:900px;margin:0 auto}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px;cursor:pointer}
+.card b{font-size:16px}
+.meta{color:var(--sub);font-size:13px;margin-top:4px}
+.snip{font-size:13px;margin-top:6px;white-space:pre-wrap;word-break:break-all}
+.tag{display:inline-block;background:#e8f0fe;color:#1a56c4;border-radius:10px;padding:1px 8px;font-size:12px;margin:4px 4px 0 0}
+mark{background:#fde68a}
+dialog{width:min(640px,96vw);max-height:92vh;border:none;border-radius:12px;padding:0}
+dialog::backdrop{background:rgba(0,0,0,.4)}
+.mh{padding:12px 14px;border-bottom:1px solid var(--line);font-weight:700;display:flex;justify-content:space-between}
+.mb{padding:12px 14px;overflow:auto;max-height:70vh}
+.mf{padding:10px 14px;border-top:1px solid var(--line);display:flex;gap:8px;justify-content:space-between}
+label{display:block;font-size:13px;color:var(--sub);margin:10px 0 3px}
+.log{border-left:3px solid var(--line);padding:4px 8px;margin:6px 0;font-size:14px;white-space:pre-wrap}
+.log small{color:var(--sub);display:block}
+.empty{text-align:center;color:var(--sub);padding:40px 0}
+#login{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:50}
+#login .box{background:#fff;border:1px solid var(--line);border-radius:12px;padding:24px;width:min(360px,92vw)}
+#login h2{margin:0 0 14px;font-size:18px}
+#loginerr{color:var(--warn);font-size:13px;min-height:18px;margin-top:8px}
+#status{font-size:12px;color:var(--sub)}
+</style>
+</head>
+<body>
+
+<div id="login">
+  <div class="box">
+    <h2>現場ナレッジDB</h2>
+    <label style="margin-top:0">パスワード</label>
+    <input id="pw" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
+    <div id="loginerr"></div>
+    <button class="p" style="width:100%;margin-top:10px" onclick="doLogin()">ログイン</button>
+  </div>
+</div>
+
+<div id="app" style="display:none">
+<header>
+  <h1>現場ナレッジDB <span id="status"></span></h1>
+  <div class="row tabs" style="margin-bottom:8px">
+    <button id="tab-buildings" onclick="setTab('buildings')">マンション</button>
+    <button id="tab-companies" onclick="setTab('companies')">建築会社</button>
+  </div>
+  <div class="row">
+    <input id="q" placeholder="検索(スペース区切りでAND検索:例「排水 札幌」)" oninput="render()" style="flex:1;min-width:200px">
+    <button class="p" onclick="openEdit()">＋新規</button>
+    <button onclick="document.getElementById('menu').showModal()">⋯</button>
+  </div>
+</header>
+<main id="list"></main>
+</div>
+
+<dialog id="edit">
+  <div class="mh"><span id="edit-title"></span><button onclick="document.getElementById('edit').close()">✕</button></div>
+  <div class="mb" id="edit-body"></div>
+  <div class="mf">
+    <button class="d" id="btn-del" onclick="delItem()">削除</button>
+    <button class="p" onclick="saveItem()">保存</button>
+  </div>
+</dialog>
+
+<dialog id="menu">
+  <div class="mh"><span>データ管理</span><button onclick="document.getElementById('menu').close()">✕</button></div>
+  <div class="mb">
+    <p style="font-size:13px;color:var(--sub)">データはクラウド(Firebase)に保存され、全員で共有されます。念のため、ときどきバックアップを取ってください。</p>
+    <label>入力者名(この端末に保存。追記・更新の記録に使います)</label>
+    <input id="who" placeholder="例:影山" oninput="saveWho()">
+    <div class="row" style="margin-top:12px">
+      <button onclick="exportJSON()">バックアップ保存(JSON)</button>
+      <button onclick="document.getElementById('imp').click()">バックアップ読込</button>
+      <button onclick="exportCSV()">現在の一覧をCSV出力</button>
+    </div>
+    <input type="file" id="imp" accept=".json" style="display:none" onchange="importJSON(this.files[0])">
+    <p id="count" style="font-size:13px"></p>
+    <button class="d" onclick="doLogout()">ログアウト</button>
+  </div>
+</dialog>
+
+<script type="module">
+import {initializeApp} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+import {getAuth,signInWithEmailAndPassword,onAuthStateChanged,signOut} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import {getDatabase,ref,onValue,set,update,remove,push} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
+
+/* ===== Firebase設定(genba-knowledge) ===== */
+const firebaseConfig={
+  apiKey:"AIzaSyBiusyL_cnxeS7F2-4hmVxXcwnQJOfMb4Q",
+  authDomain:"genba-knowledge.firebaseapp.com",
+  databaseURL:"https://genba-knowledge-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId:"genba-knowledge",
+  storageBucket:"genba-knowledge.firebasestorage.app",
+  messagingSenderId:"740855372430",
+  appId:"1:740855372430:web:08b64db52f51ec4e9e07df"
+};
+const SHARED_EMAIL="shitamidata@example.com"; // 共通アカウント(画面には出さない)
+/* ======================================== */
+
+const fbApp=initializeApp(firebaseConfig);
+const auth=getAuth(fbApp);
+const db=getDatabase(fbApp);
+
+const SCHEMA={
+  buildings:{label:'マンション',fields:[
+    {k:'name',l:'マンション名',req:1},
+    {k:'address',l:'住所'},
+    {k:'company',l:'建築会社',list:'companies'},
+    {k:'manager',l:'管理会社・管理人の連絡先'},
+    {k:'drain',l:'排水経路の特殊事情',ta:1},
+    {k:'water',l:'給水経路の特殊事情',ta:1},
+    {k:'wall',l:'設置時の張り・施工上の注意',ta:1},
+    {k:'access',l:'搬入・駐車・EV・工事可能時間',ta:1},
+    {k:'other',l:'その他',ta:1}
+  ]},
+  companies:{label:'建築会社',fields:[
+    {k:'name',l:'会社名',req:1},
+    {k:'contact',l:'担当者・連絡先'},
+    {k:'rule',l:'現場ルール(搬入・鍵・立会い・連絡方法)',ta:1},
+    {k:'caution',l:'注意点・過去のトラブル',ta:1},
+    {k:'other',l:'その他',ta:1}
+  ]}
+};
+
+let DB={buildings:[],companies:[]},tab='buildings',curId=null,unsubs=[];
+window._log=[];window._newLogs=[];
+
+const $=id=>document.getElementById(id);
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const norm=s=>String(s||'').normalize('NFKC').toLowerCase();
+const today=()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')};
+const getWho=()=>{try{return localStorage.getItem('genba_who')||''}catch(e){return ''}};
+function saveWho(){try{localStorage.setItem('genba_who',$('who').value.trim())}catch(e){}}
+
+/* ---------- 認証 ---------- */
+async function doLogin(){
+  const pw=$('pw').value;$('loginerr').textContent='';
+  if(!pw){$('loginerr').textContent='パスワードを入力してください';return}
+  try{await signInWithEmailAndPassword(auth,SHARED_EMAIL,pw);$('pw').value=''}
+  catch(e){
+    const m={'auth/invalid-credential':'パスワードが違います','auth/wrong-password':'パスワードが違います','auth/too-many-requests':'失敗が続いたため、しばらく待ってから再度お試しください','auth/network-request-failed':'通信エラーです。電波状況を確認してください','auth/invalid-api-key':'設定(apiKey)が正しくありません'};
+    $('loginerr').textContent=m[e.code]||('ログインに失敗しました:'+e.code);
+  }
+}
+async function doLogout(){$('menu').close();await signOut(auth)}
+onAuthStateChanged(auth,u=>{
+  if(u){
+    $('login').style.display='none';$('app').style.display='block';
+    $('who').value=getWho();listen();
+  }else{
+    unsubs.forEach(f=>f());unsubs=[];DB={buildings:[],companies:[]};
+    $('app').style.display='none';$('login').style.display='flex';
+  }
+});
+
+/* ---------- データ購読 ---------- */
+function listen(){
+  unsubs.forEach(f=>f());unsubs=[];
+  ['buildings','companies'].forEach(t=>{
+    unsubs.push(onValue(ref(db,t),snap=>{
+      const v=snap.val()||{};
+      DB[t]=Object.keys(v).map(id=>{
+        const o=v[id]||{};
+        const log=o.log?Object.keys(o.log).map(k=>o.log[k]).sort((a,b)=>(a.ts||0)-(b.ts||0)):[];
+        return Object.assign({},o,{id,log});
+      });
+      $('status').textContent='';
+      render();
+    },err=>{$('status').textContent='読み込みエラー:'+err.message}));
+  });
+}
+
+/* ---------- 一覧・検索 ---------- */
+function setTab(t){tab=t;$('q').value='';render()}
+function hay(it){const S=SCHEMA[tab];return norm(S.fields.map(f=>it[f.k]).join(' ')+' '+(it.tags||'')+' '+(it.log||[]).map(l=>l.text+' '+l.who).join(' '))}
+function render(){
+  ['buildings','companies'].forEach(t=>$('tab-'+t).classList.toggle('on',t===tab));
+  const terms=norm($('q').value).split(/\s+/).filter(Boolean);
+  const S=SCHEMA[tab];
+  const items=DB[tab].filter(it=>{const h=hay(it);return terms.every(t=>h.includes(t))});
+  items.sort((a,b)=>(b.updated||'').localeCompare(a.updated||''));
+  const hl=t=>{let r=esc(t);terms.forEach(w=>{try{r=r.replace(new RegExp('('+w.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+')','gi'),'<mark>$1</mark>')}catch(e){}});return r};
+  $('list').innerHTML=items.length?items.map(it=>{
+    const sub=S.fields.slice(1).filter(f=>it[f.k]).map(f=>{
+      const v=String(it[f.k]);const short=v.length>60?v.slice(0,60)+'…':v;
+      return '<div class="snip"><span style="color:var(--sub)">'+esc(f.l)+':</span> '+hl(short)+'</div>'}).slice(0,3).join('');
+    const tags=(it.tags||'').split(/[,、\s]+/).filter(Boolean).map(t=>'<span class="tag">'+hl(t)+'</span>').join('');
+    const logN=(it.log||[]).length;
+    return '<div class="card" onclick="openEdit(\''+it.id+'\')"><b>'+hl(it.name||'(無題)')+'</b>'
+      +'<div class="meta">更新 '+esc(it.updated||'-')+(it.updatedBy?' / '+esc(it.updatedBy):'')+(logN?' ／ 追記 '+logN+'件':'')+'</div>'+sub+'<div>'+tags+'</div></div>';
+  }).join(''):'<div class="empty">'+(DB[tab].length?'該当なし':'まだデータがありません。「＋新規」から登録してください。')+'</div>';
+  $('count').textContent='マンション '+DB.buildings.length+'件 ／ 建築会社 '+DB.companies.length+'件';
+}
+
+/* ---------- 編集 ---------- */
+function openEdit(id){
+  curId=id||null;const S=SCHEMA[tab];
+  const it=id?DB[tab].find(x=>x.id===id):{};
+  if(id&&!it)return;
+  $('edit-title').textContent=S.label+(id?'の編集':'の新規登録');
+  $('btn-del').style.display=id?'':'none';
+  let h='';
+  S.fields.forEach(f=>{
+    h+='<label>'+esc(f.l)+(f.req?' *':'')+'</label>';
+    const v=esc(it[f.k]||'');
+    if(f.ta)h+='<textarea data-k="'+f.k+'">'+v+'</textarea>';
+    else h+='<input data-k="'+f.k+'" value="'+v+'"'+(f.list?' list="dl-'+f.list+'"':'')+'>';
+  });
+  h+='<label>タグ(カンマ区切り:例 築古,床下点検口なし)</label><input data-k="tags" value="'+esc(it.tags||'')+'">';
+  h+='<datalist id="dl-companies">'+DB.companies.map(c=>'<option value="'+esc(c.name)+'">').join('')+'</datalist>';
+  h+='<label>追記ログ(気づいたことを日付付きで積み上げ)</label><div id="logs"></div>';
+  h+='<div class="row" style="margin-top:6px"><input id="lw" placeholder="入力者" style="flex:0 0 100px" value="'+esc(getWho())+'"><input id="lt" placeholder="追記内容" style="flex:1"><button onclick="addLog()">追記</button></div>';
+  $('edit-body').innerHTML=h;
+  window._log=JSON.parse(JSON.stringify(it.log||[]));window._newLogs=[];
+  drawLogs();
+  $('edit').showModal();
+}
+function drawLogs(){$('logs').innerHTML=window._log.map(l=>'<div class="log"><small>'+esc(l.date)+(l.who?' / '+esc(l.who):'')+'</small>'+esc(l.text)+'</div>').join('')}
+async function addLog(){
+  const t=$('lt').value.trim();if(!t)return;
+  const who=$('lw').value.trim();try{localStorage.setItem('genba_who',who)}catch(e){}
+  const e={date:today(),who:who,text:t,ts:Date.now()};
+  try{
+    if(curId)await push(ref(db,tab+'/'+curId+'/log'),e);
+    else window._newLogs.push(e);
+    window._log.push(e);drawLogs();$('lt').value='';
+  }catch(err){alert('追記に失敗しました:'+err.message)}
+}
+async function saveItem(){
+  const S=SCHEMA[tab];const o={};
+  document.querySelectorAll('#edit-body [data-k]').forEach(e=>o[e.dataset.k]=e.value.trim());
+  if(!o.name){alert(S.fields[0].l+'は必須です');return}
+  const who=$('lw').value.trim()||getWho();
+  if(who){try{localStorage.setItem('genba_who',who)}catch(e){}}
+  o.updated=today();o.updatedBy=who;
+  const pending=$('lt').value.trim();
+  if(pending){const e={date:today(),who:who,text:pending,ts:Date.now()};if(curId){await push(ref(db,tab+'/'+curId+'/log'),e)}else{window._newLogs.push(e)}}
+  try{
+    if(curId){await update(ref(db,tab+'/'+curId),o)}
+    else{
+      o.created=today();
+      const nr=push(ref(db,tab));curId=nr.key;await set(nr,o);
+      for(const l of window._newLogs)await push(ref(db,tab+'/'+curId+'/log'),l);
+    }
+    $('edit').close();
+  }catch(e){alert('保存に失敗しました:'+e.message)}
+}
+async function delItem(){
+  if(!curId||!confirm('削除しますか?(全員のデータから消えます)'))return;
+  try{await remove(ref(db,tab+'/'+curId));$('edit').close()}catch(e){alert('削除に失敗しました:'+e.message)}
+}
+
+/* ---------- バックアップ・出力 ---------- */
+function dl(name,text,type){
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type}));a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+}
+function exportJSON(){dl('genba-knowledge-'+today()+'.json',JSON.stringify(DB,null,1),'application/json')}
+function importJSON(f){
+  if(!f)return;const r=new FileReader();
+  r.onload=async()=>{try{
+    const d=JSON.parse(r.result);if(!d.buildings||!d.companies)throw new Error('形式が違います');
+    if(!confirm('読み込むと、同じIDのデータは上書きされ、新しいデータは追加されます。続けますか?'))return;
+    for(const t of ['buildings','companies']){
+      for(const item of d[t]){
+        const id=item.id||push(ref(db,t)).key;
+        const rest=Object.assign({},item);delete rest.id;delete rest.log;
+        const logObj={};
+        (item.log||[]).forEach((l,i)=>{logObj['l'+String(i).padStart(4,'0')+Math.random().toString(36).slice(2,5)]=Object.assign({},l,{ts:l.ts||i})});
+        await set(ref(db,t+'/'+id),Object.assign({},rest,{log:logObj}));
+      }
+    }
+    alert('読み込みました');
+  }catch(e){alert('読込失敗:'+e.message)}};
+  r.readAsText(f);$('imp').value='';
+}
+function exportCSV(){
+  const S=SCHEMA[tab];const cols=S.fields.map(f=>f.l).concat(['タグ','追記ログ','更新日','更新者']);
+  const q=s=>'"'+String(s==null?'':s).replace(/"/g,'""')+'"';
+  const rows=[cols.map(q).join(',')].concat(DB[tab].map(it=>
+    S.fields.map(f=>q(it[f.k])).concat([q(it.tags),q((it.log||[]).map(l=>l.date+' '+(l.who||'')+' '+l.text).join(' / ')),q(it.updated),q(it.updatedBy)]).join(',')));
+  dl(S.label+'一覧_'+today()+'.csv','\ufeff'+rows.join('\r\n'),'text/csv');
+}
+
+Object.assign(window,{doLogin,doLogout,setTab,render,openEdit,addLog,saveItem,delItem,saveWho,exportJSON,importJSON,exportCSV});
+</script>
+</body>
+</html>
