@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>現場ナレッジDB</title>
-<!-- VERSION: 2026-10-21 現場ナレッジDB v0.2(Firebase連携・共通パスワードログイン) -->
+<!-- VERSION: 2026-10-21 現場ナレッジDB v0.3(写真添付対応・縮小してDB保存) -->
 <style>
 :root{--bg:#f4f5f7;--card:#fff;--line:#dcdfe4;--main:#1f6feb;--sub:#6b7280;--warn:#c2410c}
 *{box-sizing:border-box}
@@ -35,6 +35,9 @@ label{display:block;font-size:13px;color:var(--sub);margin:10px 0 3px}
 .log{border-left:3px solid var(--line);padding:4px 8px;margin:6px 0;font-size:14px;white-space:pre-wrap}
 .log small{color:var(--sub);display:block}
 .empty{text-align:center;color:var(--sub);padding:40px 0}
+.ph{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:6px}
+.ph img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:6px;cursor:pointer;background:#eee}
+#pv img{display:block;max-width:100%;max-height:68vh;margin:0 auto}
 #login{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:50}
 #login .box{background:#fff;border:1px solid var(--line);border-radius:12px;padding:24px;width:min(360px,92vw)}
 #login h2{margin:0 0 14px;font-size:18px}
@@ -79,11 +82,20 @@ label{display:block;font-size:13px;color:var(--sub);margin:10px 0 3px}
   </div>
 </dialog>
 
+<dialog id="pv">
+  <div class="mh"><span id="pv-meta"></span><button onclick="document.getElementById('pv').close()">✕</button></div>
+  <div class="mb"><img id="pv-img" alt=""></div>
+  <div class="mf">
+    <button class="d" onclick="delPhoto()">この写真を削除</button>
+    <button onclick="document.getElementById('pv').close()">閉じる</button>
+  </div>
+</dialog>
+
 <dialog id="menu">
   <div class="mh"><span>データ管理</span><button onclick="document.getElementById('menu').close()">✕</button></div>
   <div class="mb">
-    <p style="font-size:13px;color:var(--sub)">データはクラウド(Firebase)に保存され、全員で共有されます。念のため、ときどきバックアップを取ってください。</p>
-    <label>入力者名(この端末に保存。追記・更新の記録に使います)</label>
+    <p style="font-size:13px;color:var(--sub)">データはクラウド(Firebase)に保存され、全員で共有されます。バックアップは文字情報のみで、写真は含まれません。</p>
+    <label>入力者名(この端末に保存。追記・更新・写真の記録に使います)</label>
     <input id="who" placeholder="例:影山" oninput="saveWho()">
     <div class="row" style="margin-top:12px">
       <button onclick="exportJSON()">バックアップ保存(JSON)</button>
@@ -139,8 +151,8 @@ const SCHEMA={
   ]}
 };
 
-let DB={buildings:[],companies:[]},tab='buildings',curId=null,unsubs=[];
-window._log=[];window._newLogs=[];
+let DB={buildings:[],companies:[]},tab='buildings',curId=null,unsubs=[],photoUnsub=null;
+window._log=[];window._newLogs=[];window._photos=[];window._newPhotos=[];window._pvi=-1;
 
 const $=id=>document.getElementById(id);
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -169,6 +181,7 @@ onAuthStateChanged(auth,u=>{
     $('app').style.display='none';$('login').style.display='flex';
   }
 });
+$('edit').addEventListener('close',()=>{if(photoUnsub){photoUnsub();photoUnsub=null}});
 
 /* ---------- データ購読 ---------- */
 function listen(){
@@ -204,14 +217,14 @@ function render(){
     const tags=(it.tags||'').split(/[,、\s]+/).filter(Boolean).map(t=>'<span class="tag">'+hl(t)+'</span>').join('');
     const logN=(it.log||[]).length;
     return '<div class="card" onclick="openEdit(\''+it.id+'\')"><b>'+hl(it.name||'(無題)')+'</b>'
-      +'<div class="meta">更新 '+esc(it.updated||'-')+(it.updatedBy?' / '+esc(it.updatedBy):'')+(logN?' ／ 追記 '+logN+'件':'')+'</div>'+sub+'<div>'+tags+'</div></div>';
+      +'<div class="meta">更新 '+esc(it.updated||'-')+(it.updatedBy?' / '+esc(it.updatedBy):'')+(logN?' ／ 追記 '+logN+'件':'')+(it.photoN?' ／ 写真 '+it.photoN+'枚':'')+'</div>'+sub+'<div>'+tags+'</div></div>';
   }).join(''):'<div class="empty">'+(DB[tab].length?'該当なし':'まだデータがありません。「＋新規」から登録してください。')+'</div>';
   $('count').textContent='マンション '+DB.buildings.length+'件 ／ 建築会社 '+DB.companies.length+'件';
 }
 
 /* ---------- 編集 ---------- */
 function openEdit(id){
-  curId=id||null;const S=SCHEMA[tab];
+  curId=id||null;const S=SCHEMA[tab];const t=tab;
   const it=id?DB[tab].find(x=>x.id===id):{};
   if(id&&!it)return;
   $('edit-title').textContent=S.label+(id?'の編集':'の新規登録');
@@ -225,11 +238,25 @@ function openEdit(id){
   });
   h+='<label>タグ(カンマ区切り:例 築古,床下点検口なし)</label><input data-k="tags" value="'+esc(it.tags||'')+'">';
   h+='<datalist id="dl-companies">'+DB.companies.map(c=>'<option value="'+esc(c.name)+'">').join('')+'</datalist>';
+  h+='<label>写真(自動で縮小して保存されます)</label><div class="ph" id="ph"></div>';
+  h+='<div class="row" style="margin-top:6px"><button onclick="document.getElementById(\'pf\').click()">＋写真を追加</button><span class="meta" id="phst" style="margin:0"></span>'
+    +'<input type="file" id="pf" accept="image/*" multiple style="display:none" onchange="addPhotos(Array.from(this.files));this.value=\'\'"></div>';
   h+='<label>追記ログ(気づいたことを日付付きで積み上げ)</label><div id="logs"></div>';
   h+='<div class="row" style="margin-top:6px"><input id="lw" placeholder="入力者" style="flex:0 0 100px" value="'+esc(getWho())+'"><input id="lt" placeholder="追記内容" style="flex:1"><button onclick="addLog()">追記</button></div>';
   $('edit-body').innerHTML=h;
   window._log=JSON.parse(JSON.stringify(it.log||[]));window._newLogs=[];
-  drawLogs();
+  window._newPhotos=[];window._photos=id?[]:window._newPhotos;
+  drawLogs();drawPhotos();
+  if(photoUnsub){photoUnsub();photoUnsub=null}
+  if(id){
+    photoUnsub=onValue(ref(db,'photos/'+t+'/'+id),snap=>{
+      const v=snap.val()||{};
+      window._photos=Object.keys(v).map(k=>Object.assign({id:k},v[k])).sort((a,b)=>(a.ts||0)-(b.ts||0));
+      drawPhotos();
+      const n=window._photos.length;const cur=DB[t].find(x=>x.id===id);
+      if(cur&&(cur.photoN||0)!==n)update(ref(db,t+'/'+id),{photoN:n}).catch(()=>{});
+    },err=>{const el=$('ph');if(el)el.innerHTML='<div class="meta">写真を読み込めません:'+esc(err.message)+'</div>'});
+  }
   $('edit').showModal();
 }
 function drawLogs(){$('logs').innerHTML=window._log.map(l=>'<div class="log"><small>'+esc(l.date)+(l.who?' / '+esc(l.who):'')+'</small>'+esc(l.text)+'</div>').join('')}
@@ -243,6 +270,59 @@ async function addLog(){
     window._log.push(e);drawLogs();$('lt').value='';
   }catch(err){alert('追記に失敗しました:'+err.message)}
 }
+
+/* ---------- 写真 ---------- */
+function compress(file,max=1280,q=0.72){
+  return new Promise((res,rej)=>{
+    const url=URL.createObjectURL(file);const img=new Image();
+    img.onload=()=>{try{
+      let w=img.naturalWidth,h=img.naturalHeight;const s=Math.min(1,max/Math.max(w,h));
+      w=Math.round(w*s);h=Math.round(h*s);
+      const c=document.createElement('canvas');c.width=w;c.height=h;
+      c.getContext('2d').drawImage(img,0,0,w,h);
+      URL.revokeObjectURL(url);res(c.toDataURL('image/jpeg',q));
+    }catch(e){URL.revokeObjectURL(url);rej(e)}};
+    img.onerror=()=>{URL.revokeObjectURL(url);rej(new Error('この形式の画像は読み込めません'))};
+    img.src=url;
+  });
+}
+function drawPhotos(){
+  const el=$('ph');if(!el)return;
+  el.innerHTML=window._photos.length
+    ?window._photos.map((p,i)=>'<img src="'+esc(p.data)+'" onclick="viewPhoto('+i+')" loading="lazy" alt="">').join('')
+    :'<div class="meta">写真はまだありません</div>';
+}
+async function addPhotos(files){
+  if(!files||!files.length)return;
+  const st=$('phst');let ok=0;
+  for(let i=0;i<files.length;i++){
+    if(st)st.textContent='処理中 '+(i+1)+'/'+files.length;
+    try{
+      const data=await compress(files[i]);
+      const p={data:data,date:today(),who:getWho(),ts:Date.now()+i};
+      if(curId){await push(ref(db,'photos/'+tab+'/'+curId),p)}
+      else{window._newPhotos.push(Object.assign({id:'tmp'+Date.now()+'_'+i},p));drawPhotos()}
+      ok++;
+    }catch(e){alert('写真を追加できませんでした('+(files[i].name||'')+'):'+e.message)}
+  }
+  if(st)st.textContent=ok?ok+'枚追加しました':'';
+}
+function viewPhoto(i){
+  const p=window._photos[i];if(!p)return;
+  window._pvi=i;$('pv-img').src=p.data;
+  $('pv-meta').textContent=(p.date||'')+(p.who?' / '+p.who:'');
+  $('pv').showModal();
+}
+async function delPhoto(){
+  const p=window._photos[window._pvi];if(!p||!confirm('この写真を削除しますか?'))return;
+  try{
+    if(curId&&!String(p.id).startsWith('tmp')){await remove(ref(db,'photos/'+tab+'/'+curId+'/'+p.id))}
+    else{window._newPhotos.splice(window._pvi,1);drawPhotos()}
+    $('pv').close();
+  }catch(e){alert('削除に失敗しました:'+e.message)}
+}
+
+/* ---------- 保存・削除 ---------- */
 async function saveItem(){
   const S=SCHEMA[tab];const o={};
   document.querySelectorAll('#edit-body [data-k]').forEach(e=>o[e.dataset.k]=e.value.trim());
@@ -251,20 +331,25 @@ async function saveItem(){
   if(who){try{localStorage.setItem('genba_who',who)}catch(e){}}
   o.updated=today();o.updatedBy=who;
   const pending=$('lt').value.trim();
-  if(pending){const e={date:today(),who:who,text:pending,ts:Date.now()};if(curId){await push(ref(db,tab+'/'+curId+'/log'),e)}else{window._newLogs.push(e)}}
   try{
+    if(pending){const e={date:today(),who:who,text:pending,ts:Date.now()};if(curId){await push(ref(db,tab+'/'+curId+'/log'),e)}else{window._newLogs.push(e)}}
     if(curId){await update(ref(db,tab+'/'+curId),o)}
     else{
-      o.created=today();
+      o.created=today();o.photoN=window._newPhotos.length;
       const nr=push(ref(db,tab));curId=nr.key;await set(nr,o);
       for(const l of window._newLogs)await push(ref(db,tab+'/'+curId+'/log'),l);
+      for(const p of window._newPhotos)await push(ref(db,'photos/'+tab+'/'+curId),{data:p.data,date:p.date,who:p.who,ts:p.ts});
     }
     $('edit').close();
   }catch(e){alert('保存に失敗しました:'+e.message)}
 }
 async function delItem(){
-  if(!curId||!confirm('削除しますか?(全員のデータから消えます)'))return;
-  try{await remove(ref(db,tab+'/'+curId));$('edit').close()}catch(e){alert('削除に失敗しました:'+e.message)}
+  if(!curId||!confirm('削除しますか?(写真も含め、全員のデータから消えます)'))return;
+  try{
+    await remove(ref(db,tab+'/'+curId));
+    await remove(ref(db,'photos/'+tab+'/'+curId));
+    $('edit').close();
+  }catch(e){alert('削除に失敗しました:'+e.message)}
 }
 
 /* ---------- バックアップ・出力 ---------- */
@@ -291,14 +376,14 @@ function importJSON(f){
   r.readAsText(f);$('imp').value='';
 }
 function exportCSV(){
-  const S=SCHEMA[tab];const cols=S.fields.map(f=>f.l).concat(['タグ','追記ログ','更新日','更新者']);
+  const S=SCHEMA[tab];const cols=S.fields.map(f=>f.l).concat(['タグ','追記ログ','写真枚数','更新日','更新者']);
   const q=s=>'"'+String(s==null?'':s).replace(/"/g,'""')+'"';
   const rows=[cols.map(q).join(',')].concat(DB[tab].map(it=>
-    S.fields.map(f=>q(it[f.k])).concat([q(it.tags),q((it.log||[]).map(l=>l.date+' '+(l.who||'')+' '+l.text).join(' / ')),q(it.updated),q(it.updatedBy)]).join(',')));
+    S.fields.map(f=>q(it[f.k])).concat([q(it.tags),q((it.log||[]).map(l=>l.date+' '+(l.who||'')+' '+l.text).join(' / ')),q(it.photoN||0),q(it.updated),q(it.updatedBy)]).join(',')));
   dl(S.label+'一覧_'+today()+'.csv','\ufeff'+rows.join('\r\n'),'text/csv');
 }
 
-Object.assign(window,{doLogin,doLogout,setTab,render,openEdit,addLog,saveItem,delItem,saveWho,exportJSON,importJSON,exportCSV});
+Object.assign(window,{doLogin,doLogout,setTab,render,openEdit,addLog,addPhotos,viewPhoto,delPhoto,saveItem,delItem,saveWho,exportJSON,importJSON,exportCSV});
 </script>
 </body>
 </html>
