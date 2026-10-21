@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>現場ナレッジDB</title>
-<!-- VERSION: 2026-10-21 現場ナレッジDB v0.4(iPadの写真追加を修正・版数表示) -->
+<!-- VERSION: 2026-10-21 現場ナレッジDB v0.5(写真追加を1枚選択・複数選択・撮影の3ボタンに分離) -->
 <style>
 :root{--bg:#f4f5f7;--card:#fff;--line:#dcdfe4;--main:#1f6feb;--sub:#6b7280;--warn:#c2410c}
 *{box-sizing:border-box}
@@ -105,7 +105,7 @@ label.btn{display:inline-block;padding:9px 14px;border:1px solid var(--line);bor
     </div>
     <input type="file" id="imp" accept=".json" style="display:none" onchange="importJSON(this.files[0])">
     <p id="count" style="font-size:13px"></p>
-    <p class="meta">バージョン 0.4(2026-10-21)</p>
+    <p class="meta">バージョン 0.5(2026-10-21)</p>
     <button class="d" onclick="doLogout()">ログアウト</button>
   </div>
 </dialog>
@@ -241,7 +241,11 @@ function openEdit(id){
   h+='<label>タグ(カンマ区切り:例 築古,床下点検口なし)</label><input data-k="tags" value="'+esc(it.tags||'')+'">';
   h+='<datalist id="dl-companies">'+DB.companies.map(c=>'<option value="'+esc(c.name)+'">').join('')+'</datalist>';
   h+='<label>写真(自動で縮小して保存されます)</label><div class="ph" id="ph"></div>';
-  h+='<div class="row" style="margin-top:6px"><label class="btn">＋写真を追加<input type="file" id="pf" accept="image/*" multiple style="display:none" onchange="addPhotos(Array.from(this.files))"></label><span class="meta" id="phst" style="margin:0"></span></div>';
+  h+='<div class="row" style="margin-top:6px">'
+    +'<label class="btn">＋写真を追加<input type="file" id="pf" accept="image/*" style="display:none" onchange="addPhotos(Array.from(this.files))"></label>'
+    +'<label class="btn">複数まとめて<input type="file" id="pf2" accept="image/*" multiple style="display:none" onchange="addPhotos(Array.from(this.files))"></label>'
+    +'<label class="btn">📷撮影<input type="file" id="pf3" accept="image/*" capture="environment" style="display:none" onchange="addPhotos(Array.from(this.files))"></label>'
+    +'<span class="meta" id="phst" style="margin:0"></span></div>';
   h+='<label>追記ログ(気づいたことを日付付きで積み上げ)</label><div id="logs"></div>';
   h+='<div class="row" style="margin-top:6px"><input id="lw" placeholder="入力者" style="flex:0 0 100px" value="'+esc(getWho())+'"><input id="lt" placeholder="追記内容" style="flex:1"><button onclick="addLog()">追記</button></div>';
   $('edit-body').innerHTML=h;
@@ -306,7 +310,7 @@ async function addPhotos(files){
       ok++;
     }catch(e){errs.push((files[i].name||'写真')+':'+(e&&e.message?e.message:e))}
   }
-  const pf=$('pf');if(pf)pf.value='';
+  ['pf','pf2','pf3'].forEach(id=>{const e=$(id);if(e)e.value=''});
   if(st)st.textContent=(ok?ok+'枚追加しました ':'')+(errs.length?'失敗:'+errs.join(' / '):'');
   if(errs.length&&!ok)alert('写真を追加できませんでした\n'+errs.join('\n'));
 }
